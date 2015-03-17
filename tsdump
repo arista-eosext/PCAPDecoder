@@ -29,7 +29,7 @@
 #
 # Timestamp Dump
 #
-#    Version 3.2 1/10/2013
+#    Version 3.2 16/03/2015
 #    Written by: 
 #       Matt Murray, Arista Networks
 #       Andrei Dvornic, Arista Networks
@@ -41,6 +41,7 @@
 #           - decode error vs. previous versions: max 150ns in 0.04% of cases
 #       3.1 - cover all corner cases
 #       3.2 - minor enhancements
+#       3.3 - bug fixes
 
 '''
    DESCRIPTION
@@ -80,7 +81,7 @@
         - KEY:     key frame
    
    COMPATIBILITY 
-      Version 3.2 has been developed and tested using Python 2.7,
+      Version 3.3 has been developed and tested using Python 2.7,
       but should work on any system supporting Python 2.6 or
       later. Please reach out to support@aristanetworks.com for
       assistance if needed.
@@ -394,7 +395,7 @@ def _monitorIntf( intf ):
                          'VLAN->deviceId mapping! ' %
                          deviceId )
 
-            if keyframes[ deviceId ]:
+            if len( keyframes[ deviceId ] ) == 2:
                keyframes[ deviceId ] = keyframes[ deviceId ][ 1: ]
                
             hwTicks = asicTs & 0x7FFFFFFF

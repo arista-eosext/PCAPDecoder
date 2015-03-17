@@ -29,7 +29,7 @@
 #
 # PCAP Timestamp Decoder
 #
-#    Version 4.0 25/11/2013
+#    Version 4.1 16/03/2015
 #    Written by: 
 #       John Peach, Arista Networks
 #       Matt Murray, Arista Networks
@@ -52,6 +52,7 @@
 #       3.2 - added support for decoding pcaps which include FCS
 #       3.3 - enhanced help message
 #       4.0 - added nanosecond precision for output pcap
+#       4.1 - bug fixes
 
 '''
    DESCRIPTION
@@ -110,7 +111,7 @@
    
 
    COMPATIBILITY 
-      Version 4.0 has been developed and tested against
+      Version 4.1 has been developed and tested against
       Python 2.7 on MacOS, but should work on any other operating
       system supporting Python 2.6 or later. Please reach out to
       support@aristanetworks.com for assistance if needed.
@@ -166,9 +167,6 @@ vlanToDevId = {}
 #
 #    vlanToDevId[ '*' ] = 1
 #-------------------------------------------------------------
-
-vlanToDevId[ 10 ] = 10
-vlanToDevId[ 20 ] = 20
 
 import binascii
 import dpkt
@@ -323,7 +321,8 @@ def _printTimestamps( pcapData, showPcap, showUTC, showTicks, showDelta,
                              else 'Untagged'
 
       row = [ ( '%1.6f' % entry.timestamp.pcapTs 
-                if entry.timestamp.pcapTs else '' ).rjust( 18 ) if showPcap else '',
+                if entry.timestamp.pcapTs else '' ).rjust( 18 ) 
+                   if showPcap else '',
               ( '%1.6f' % entry.timestamp.pcapDelta 
                 if entry.timestamp.pcapDelta else '' ).rjust( 18 ) 
               if showPcap and showDelta else '',
@@ -371,7 +370,7 @@ def _decodeTimestamps( pcapTs, hwTicks, devId ):
       assert kframes < 3
       kf = keyframes[ devId ][ -1 ]
       if kframes == 2:
-         prevKf = keyframes[ devId ].asicTs         
+         prevKf = keyframes[ devId ][ 0 ]
 
    k1 = kf.asicTs if kf else None
    utc = 0
@@ -450,7 +449,7 @@ def _readPcap( inputFile, outputFile, fcs ):
                       'but device not configured in the '
                       'VLAN->deviceId mapping! ' % 
                       deviceId )
-         if keyframes[ deviceId ]:
+         if len( keyframes[ deviceId ] ) == 2:
             keyframes[ deviceId ] = keyframes[ deviceId ][ 1: ]
 
          hwTicks = asicTime & 0x7FFFFFFF
