@@ -440,8 +440,9 @@ def _readPcap( inputFile, outputFile, fcs ):
 
       # Key frame
       if eth.type == 2048 and eth.ip.p == 253 and eth.ip.ttl == 64:
-         (asicTime, utc, deviceId) = struct.unpack('>QQxxxxxxxxxxxxxxxxxxxxxxxxHxxxx', eth.ip.data)
-
+         (asicTime, utc, deviceId) = \
+             struct.unpack('>QQxxxxxxxxxxxxxxxxxxxxxxxxHxxxx', 
+                           eth.ip.data)
          if deviceId not in keyframes:
             sys.exit( 'ERROR: Keyframe from device %d seen in the capture, '
                       'but device not configured in the '

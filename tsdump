@@ -383,7 +383,9 @@ def _monitorIntf( intf ):
              eth.ip.p == 253 and eth.ip.ttl == 64 ):
             _trace( 'Reading keyframe...' )
 
-            (asicTs, utc, deviceId) = struct.unpack('>QQxxxxxxxxxxxxxxxxxxxxxxxxHxxxx', eth.ip.data)
+            (asicTs, utc, deviceId) = \
+                struct.unpack('>QQxxxxxxxxxxxxxxxxxxxxxxxxHxxxx', 
+                              eth.ip.data)
 
             if deviceId not in keyframes:
                sys.exit( 'ERROR: Keyframe from device %d '
