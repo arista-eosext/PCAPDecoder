@@ -168,7 +168,7 @@ vlanToDevId = {}
 #    vlanToDevId[ '*' ] = 1
 #-------------------------------------------------------------
 
-import binascii
+import struct
 import dpkt
 import optparse
 import socket
@@ -440,9 +440,7 @@ def _readPcap( inputFile, outputFile, fcs ):
 
       # Key frame
       if eth.type == 2048 and eth.ip.p == 253 and eth.ip.ttl == 64:
-         asicTime = int( '0x' + binascii.hexlify( eth.ip.data[ 0 : 8 ] ), 0 ) 
-         utc = int( '0x' + binascii.hexlify( eth.ip.data[ 8 : 16 ] ), 0 )
-         deviceId = int( '0x' + binascii.hexlify( eth.ip.data[ 40 : 42 ] ), 0 )
+         (asicTime, utc, deviceId) = struct.unpack('>QQxxxxxxxxxxxxxxxxxxxxxxxxHxxxx', eth.ip.data)
 
          if deviceId not in keyframes:
             sys.exit( 'ERROR: Keyframe from device %d seen in the capture, '
@@ -482,10 +480,10 @@ def _readPcap( inputFile, outputFile, fcs ):
                continue
 
          if fcs:
-            stamp = int( '0x' + binascii.hexlify( buf[ -8 : -4 ] ), 0 )
+            (stamp,) = struct.unpack('>L', buf[ -8 : -4 ])
          else:
-            stamp = int( '0x' + binascii.hexlify( buf[ -4 : ] ), 0 )
-      
+            (stamp,) = struct.unpack('>L', buf[ -4 : ])
+
          hwTicks = ( ( stamp & 0xffffff00 ) >> 1 ) | ( stamp & 0x7f )
          devId = _devId( vlan )
          ts =  _decodeTimestamps( pcapTs, hwTicks, devId )

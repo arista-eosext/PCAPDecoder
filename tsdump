@@ -131,7 +131,7 @@ vlanToDevId = {}
 #    vlanToDevId[ '*' ] = 1
 #-------------------------------------------------------------
 
-import binascii
+import struct
 import dpkt
 import fcntl
 import optparse
@@ -383,10 +383,7 @@ def _monitorIntf( intf ):
              eth.ip.p == 253 and eth.ip.ttl == 64 ):
             _trace( 'Reading keyframe...' )
 
-            asicTs = int( '0x' + binascii.hexlify( eth.ip.data[ 0 : 8 ] ), 0 ) 
-            utc = int( '0x' + binascii.hexlify( eth.ip.data[ 8 : 16 ] ), 0 )
-            deviceId = int( '0x' + binascii.hexlify( 
-                            eth.ip.data[ 40 : 42 ] ), 0 )
+            (asicTs, utc, deviceId) = struct.unpack('>QQxxxxxxxxxxxxxxxxxxxxxxxxHxxxx', eth.ip.data)
 
             if deviceId not in keyframes:
                sys.exit( 'ERROR: Keyframe from device %d '
@@ -428,7 +425,7 @@ def _monitorIntf( intf ):
                           'VLAN->deviceId mapping!' % vlan )
                   continue
 
-            stamp = int( '0x' + binascii.hexlify( buf[ -4 : ] ), 0 )
+            (stamp,) = struct.unpack('>L', buf[ -4 : ])
 
             hwTicks = ( ( stamp & 0xffffff00 ) >> 1 ) | ( stamp & 0x7f )
             devId = _devId( vlan )
