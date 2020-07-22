@@ -1,6 +1,6 @@
-#!/usr/bin/env python 
+#!/usr/bin/env python
 #
-# Copyright (c) 2013, Arista Networks, Inc.
+# Copyright (c) 2013-2020, Arista Networks, Inc.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -14,7 +14,7 @@
 #  - Neither the name of Arista Networks nor the names of its
 # contributors may be used to endorse or promote products derived from
 # this software without specific prior written permission.
-# 
+#
 # THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
 # "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
 # LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
@@ -29,12 +29,13 @@
 #
 # PCAP Timestamp Decoder
 #
-#    Version 4.1 16/03/2015
-#    Written by: 
+#    Version 5.0 16/06/2020
+#    Written by:
 #       John Peach, Arista Networks
 #       Matt Murray, Arista Networks
 #       Andrei Dvornic, Arista Networks
 #       Phil Harrison, Arista Networks
+#       Darrin Machay, Arista Networks
 #
 #    Revision history:
 #       1.0 - initial release
@@ -53,16 +54,24 @@
 #       3.3 - enhanced help message
 #       4.0 - added nanosecond precision for output pcap
 #       4.1 - bug fixes
+#       5.0 - migrated to Python 3 and added skew field support
 
 '''
    DESCRIPTION
       PCAP Timestamp Decoder enables users to decode the timestamps
       applied by the Arista 7150 series switches.
 
+      This software is intended only as a demonstration of timestamp decoding
+      to enable users to understand the underlying decoding mechanisms and to
+      support the development of their own implementations.
+
+      It should not be considered as an authoritative or highly optimized
+      implementation.
+
    INSTALLATION
-      Requirements: 
-         - Python 2.6 or later: http://www.python.org/
-         - dpkt: http://code.google.com/p/dpkt/
+      Requirements:
+         - Python 3.5 or later: http://www.python.org/
+         - dpkt: https://dpkt.readthedocs.io/en/latest/
 
       In order to install PCAP Timestamp Decoder, copy 'pcaptd' to
       your filesystem.
@@ -74,10 +83,10 @@
 
       Once the mapping is configured, the PCAP Timestamp Decoder can
       then be started using:
-      
+
          (bash:root)# <path-to-script>/pcaptd [<options>] <input_pcap>
 
-   CONFIGURATION 
+   CONFIGURATION
       In order to show UTC decode details, use the '--utc-details'
       option. By default, stats are sent to stdout. In order to print
       them to a file, use the '--write-details-to-file' option (this
@@ -104,16 +113,16 @@
      be decoded will show up with a timestamp of 0 in the output file.
      Moreover, note that the timestamp format of the new pcap file
      is using nanosecond precision; this means that older versions
-     of Whireshark (earlier than 1.0.5 ) might not be able to decode 
+     of Whireshark (earlier than 1.0.5 ) might not be able to decode
      it. For more on this, see:
 
          http://wiki.wireshark.org/Development/LibpcapFileFormat
-   
 
-   COMPATIBILITY 
-      Version 4.1 has been developed and tested against
-      Python 2.7 on MacOS, but should work on any other operating
-      system supporting Python 2.6 or later. Please reach out to
+
+   COMPATIBILITY
+      Version 5.0 has been developed and tested against
+      Python 3.7 on Linux, but should work on any other operating
+      system supporting Python 3.5 or later. Please reach out to
       support@aristanetworks.com for assistance if needed.
 
    LIMITATIONS
@@ -150,7 +159,7 @@ vlanToDevId = {}
 # !!! INSERT VLAN->deviceId mapping below !!!
 # ------------------------------------------------------------
 # vlanToDevId[ <vlan> ] = <devId>
-# e.g. 
+# e.g.
 #    VLAN10 timestamped through device 1
 #    VLAN20 and VLAN30 timestamped through device 2
 #
@@ -158,7 +167,7 @@ vlanToDevId = {}
 #    vlanToDevId[ 20 ] = 2
 #    vlanToDevId[ 30 ] = 2
 #
-# If the inspected traffic is untagged and timestamped on a single 
+# If the inspected traffic is untagged and timestamped on a single
 # switch, you can use:
 #
 #    vlanToDevId[ '*' ] = <devId>
@@ -167,7 +176,7 @@ vlanToDevId = {}
 #    Untagged traffic timestamped through device 1
 #
 #    vlanToDevId[ '*' ] = 1
-#-------------------------------------------------------------
+# -------------------------------------------------------------
 
 import struct
 import dpkt
@@ -180,17 +189,18 @@ from datetime import datetime
 from collections import namedtuple
 
 from dpkt import pcap
-pcap.TCPDUMP_MAGIC = 0xa1b23c4dL
 
-Timestamp = namedtuple( 'Timestamp', 'pcapTs pcapDelta hwTicks ' 
-                        'hwDelta utc utcDelta rollover' )
-Pcap = namedtuple( 'Pcap', 'timestamp keyframe ' 
-                   'srcIp vlanOrDevId' )
-KeyframeData = namedtuple( 'KeyframeData', 'asicTs utc' )
+pcap.TCPDUMP_MAGIC = 0xa1b23c4d
+
+Timestamp = namedtuple('Timestamp', 'pcapTs pcapDelta hwTicks '
+                                    'hwDelta utc utcDelta rollover')
+Pcap = namedtuple('Pcap', 'timestamp keyframe '
+                          'srcIp vlanOrDevId')
+KeyframeData = namedtuple('KeyframeData', 'asicTs utc skewFactor')
 
 # Based on the clock rate (350Mhz)
-TICK_LENGTH = 20.0/7.0
-MAX_TICKS = 2**31 - 1
+TICK_LENGTH = 20.0 / 7.0
+MAX_TICKS = 2 ** 31 - 1
 
 # { deviceId : <value> }
 prevHwTicks = {}
@@ -201,362 +211,383 @@ prevUtc = {}
 # { <deviceId> : [ KeyframeData, KeyframeData ] }
 keyframes = {}
 
-class VLANEthernet( dpkt.ethernet.Ethernet ):
-   __hdr__ = (
-      ( 'dst', '6s', '' ),
-      ( 'src', '6s', '' ),
-      ( '__VLAN__', 'H', dpkt.ethernet.ETH_TYPE_8021Q ),
-      ( 'vlan', 'H', 1 ),
-      ( 'type', 'H', dpkt.ethernet.ETH_TYPE_IP )
-      )
-   _typesw = {}
 
-class PcapNGFileHdr( dpkt.pcap.FileHdr ):
-   """pcap file header."""
-   __hdr__ = (
-      ( 'magic', 'I', 0xa1b23c4dL ),
-      ( 'v_major', 'H', dpkt.pcap.PCAP_VERSION_MAJOR ),
-      ( 'v_minor', 'H', dpkt.pcap.PCAP_VERSION_MINOR ),
-      ( 'thiszone', 'I', 0 ),
-      ( 'sigfigs', 'I', 0 ),
-      ( 'snaplen', 'I', 1500 ),
-      ( 'linktype', 'I', 1 ),
-      )
+class VLANEthernet(dpkt.ethernet.Ethernet):
+    __hdr__ = (
+        ('dst', '6s', ''),
+        ('src', '6s', ''),
+        ('__VLAN__', 'H', dpkt.ethernet.ETH_TYPE_8021Q),
+        ('vlan', 'H', 1),
+        ('type', 'H', dpkt.ethernet.ETH_TYPE_IP)
+    )
+    _typesw = {}
 
-class PcapNGWriter( dpkt.pcap.Writer ):
-   def __init__( self, fileobj, 
-                 snaplen=1500, linktype=dpkt.pcap.DLT_EN10MB ):
-      self.__f = fileobj
-      fh = PcapNGFileHdr( naplen=snaplen, linktype=linktype )
-      self.__f.write( str( fh ) )
-      
-   def writepkt( self, pkt, ts=None ):
-      if ts is None:
-         ts = time.time()
-      s = str( pkt )
-      n = len( s )
-      ph = dpkt.pcap.PktHdr( tv_sec=int( ts ),
-                             # nanosecond precision                     
-                             tv_usec=int( ( float( ts ) - 
-                                            int( ts ) ) * 1000000000.0 ),
-                             caplen=n, len=n )
-      self.__f.write( str( ph ) )
-      self.__f.write( s )
-            
-   def close(self):
-      self.__f.close()
+
+class PcapNGFileHdr(dpkt.pcap.FileHdr):
+    """pcap file header."""
+    __hdr__ = (
+        ('magic', 'I', 0xa1b23c4d),
+        ('v_major', 'H', dpkt.pcap.PCAP_VERSION_MAJOR),
+        ('v_minor', 'H', dpkt.pcap.PCAP_VERSION_MINOR),
+        ('thiszone', 'I', 0),
+        ('sigfigs', 'I', 0),
+        ('snaplen', 'I', 1500),
+        ('linktype', 'I', 1),
+    )
+
+
+class PcapNGWriter(dpkt.pcap.Writer):
+    def __init__(self, fileobj,
+                 snaplen=1500, linktype=dpkt.pcap.DLT_EN10MB):
+        self.__f = fileobj
+        fh = PcapNGFileHdr(naplen=snaplen, linktype=linktype)
+        self.__f.write(str(fh))
+
+    def writepkt(self, pkt, ts=None):
+        if ts is None:
+            ts = time.time()
+        s = str(pkt)
+        n = len(s)
+        ph = dpkt.pcap.PktHdr(tv_sec=int(ts),
+                              # nanosecond precision
+                              tv_usec=int((float(ts) -
+                                           int(ts)) * 1000000000.0),
+                              caplen=n, len=n)
+        self.__f.write(str(ph))
+        self.__f.write(s)
+
+    def close(self):
+        self.__f.close()
+
 
 def _untaggedTraffic():
-   return len( vlanToDevId ) == 1 and '*' in vlanToDevId
+    return len(vlanToDevId) == 1 and '*' in vlanToDevId
 
-def _devId( key ):
-   if _untaggedTraffic():
-      key = '*'
-   return vlanToDevId[ key ]
 
-def _printTimestamps( pcapData, showPcap, showUTC, showTicks, showDelta, 
-                      showSourceIp, filename=None ):
-   units = 'ticks'
-   if not showTicks:
-      units = 'ns'
+def _devId(key):
+    if _untaggedTraffic():
+        key = '*'
+    return vlanToDevId[key]
 
-   header = [ 'PCAP tstamp(s)'.rjust( 18 ) 
-                 if showPcap else '',
-              'PCAP delta(ns)'.rjust( 18 ) 
-                 if showPcap and showDelta else '',
-              ( 'HW tstamp(%s)' % units ).rjust( 18 ),
-              ( 'HW delta(%s)' % units ).rjust( 18 ) 
-                 if showDelta else '',
-              'UTC(ns)'.rjust( 20 ) 
-                 if showUTC else '',
-              'UTC delta(ns)'.rjust( 15 ) 
-                 if showUTC and showDelta else '',
-              'UTC'.rjust( 30 ) 
-                 if showUTC and showUTC else '',
-              'Source IP'.rjust( 15 ) 
-                 if showSourceIp else '',
-              'VLAN/DeviceId(VLANs)'.rjust( 20 ),
-              'Note'.rjust( 5 ) ]
 
-   if filename:
-      try:
-         f = open( filename, 'w' )
-      except IOError, e:
-         sys.exit( '\nERROR: Unable to open file %s: %s\n' % 
-                   ( filename, str( e ) ) )
+def _printTimestamps(pcapData, showPcap, showUTC, showTicks, showDelta,
+                     showSourceIp, filename=None):
+    units = 'ticks'
+    if not showTicks:
+        units = 'ns'
 
-      f.write( ' '.join( header ) + '\n' )
-   else:
-      print( ' '.join( header ) )
-
-   for entry in pcapData:
-      note = ''
-      if entry.timestamp.rollover:
-         note = 'R'
-      elif entry.keyframe:
-         note = 'KEY'
-
-      utcString = datetime.utcfromtimestamp( 
-                     entry.timestamp.utc / 10.0**9 ).strftime( 
-                     '%Y-%m-%d %H:%M:%S.%f' )
-
-      if showTicks:
-         hwString = '%d' % entry.timestamp.hwTicks
-         hwDeltaString = '%d' % entry.timestamp.hwDelta
-      else: 
-         hwString = '%1.2f' % ( entry.timestamp.hwTicks * TICK_LENGTH )
-         hwDeltaString = '%1.2f' % ( entry.timestamp.hwDelta * TICK_LENGTH )
-         
-      if entry.keyframe:
-         vlanOrDevIdString = '%d' % entry.vlanOrDevId
-         if not _untaggedTraffic():
-            vlanOrDevIdString += '(%s)' % ( 
-               ','.join( [ str( x ) 
-                           for x in vlanToDevId 
-                           if vlanToDevId[ x ] == entry.vlanOrDevId ] ) )
-         else:
-            vlanOrDevIdString += '(untagged)'
-      else:
-         vlanOrDevIdString = 'VLAN%s' % entry.vlanOrDevId \
-                             if entry.vlanOrDevId is not None \
-                             else 'Untagged'
-
-      row = [ ( '%1.6f' % entry.timestamp.pcapTs 
-                if entry.timestamp.pcapTs else '' ).rjust( 18 ) 
-                   if showPcap else '',
-              ( '%1.6f' % entry.timestamp.pcapDelta 
-                if entry.timestamp.pcapDelta else '' ).rjust( 18 ) 
+    header = ['PCAP tstamp(s)'.rjust(18)
+              if showPcap else '',
+              'PCAP delta(ns)'.rjust(18)
               if showPcap and showDelta else '',
-              hwString.rjust( 18 ),
-              ( hwDeltaString if entry.timestamp.hwDelta else '' ).rjust( 18 )
+              ('HW tstamp(%s)' % units).rjust(18),
+              ('HW delta(%s)' % units).rjust(18)
               if showDelta else '',
-              ( '%d' % entry.timestamp.utc 
-                if entry.timestamp.utc else '' ).rjust( 20 ) 
+              'UTC(ns)'.rjust(20)
               if showUTC else '',
-              ( ( '%1.0f' % entry.timestamp.utcDelta 
-                  if entry.timestamp.utcDelta else '' ) 
-                if entry.timestamp.utc else '' ).rjust( 15 ) 
-              if showUTC  and showDelta else '',
-              ( utcString if entry.timestamp.utc else '' ).rjust( 30 ) 
-              if showUTC else '',
-              ( socket.inet_ntoa( entry.srcIp ) 
-                if entry.srcIp else '' ).rjust( 15 ) 
+              'UTC delta(ns)'.rjust(15)
+              if showUTC and showDelta else '',
+              'UTC'.rjust(30)
+              if showUTC and showUTC else '',
+              'Source IP'.rjust(15)
               if showSourceIp else '',
-              vlanOrDevIdString.rjust( 20 ),
-              note.rjust( 5 ) ]
+              'VLAN/DeviceId(VLANs)'.rjust(20),
+              'Note'.rjust(5)]
 
-      if filename:
-         f.write( ' '.join( row ) + '\n' )
-      else:
-         print( ' '.join( row ) )
+    if filename:
+        try:
+            f = open(filename, 'w')
+        except IOError as e:
+            sys.exit('\nERROR: Unable to open file %s: %s\n' %
+                     (filename, str(e)))
 
-   if filename:
-      f.close()
+        f.write(' '.join(header) + '\n')
+    else:
+        print((' '.join(header)))
 
-def _decodeValue( timestamp, keyframe ):
-   if keyframe is None:
-      return 0
+    for entry in pcapData:
+        note = ''
+        if entry.timestamp.rollover:
+            note = 'R'
+        elif entry.keyframe:
+            note = 'KEY'
 
-   diff = timestamp - keyframe.asicTs
-   if diff < 0:
-      diff += MAX_TICKS
-   return keyframe.utc + long( round( diff * TICK_LENGTH ) )
+        utcString = datetime.utcfromtimestamp(
+            entry.timestamp.utc / 10.0 ** 9).strftime(
+            '%Y-%m-%d %H:%M:%S.%f')
 
-def _decodeTimestamps( pcapTs, hwTicks, devId ):
-   kf = None
-   prevKf = None
+        if showTicks:
+            hwString = '%d' % entry.timestamp.hwTicks
+            hwDeltaString = '%d' % entry.timestamp.hwDelta
+        else:
+            hwString = '%1.2f' % (entry.timestamp.hwTicks * TICK_LENGTH)
+            hwDeltaString = '%1.2f' % (entry.timestamp.hwDelta * TICK_LENGTH)
 
-   kframes = len( keyframes[ devId ] )
-   if kframes > 0:
-      assert kframes < 3
-      kf = keyframes[ devId ][ -1 ]
-      if kframes == 2:
-         prevKf = keyframes[ devId ][ 0 ]
+        if entry.keyframe:
+            vlanOrDevIdString = '%d' % entry.vlanOrDevId
+            if not _untaggedTraffic():
+                vlanOrDevIdString += '(%s)' % (
+                    ','.join([str(x)
+                              for x in vlanToDevId
+                              if vlanToDevId[x] == entry.vlanOrDevId]))
+            else:
+                vlanOrDevIdString += '(untagged)'
+        else:
+            vlanOrDevIdString = 'VLAN%s' % entry.vlanOrDevId \
+                if entry.vlanOrDevId is not None \
+                else 'Untagged'
 
-   k1 = kf.asicTs if kf else None
-   utc = 0
-   if k1:
-      if k1 < hwTicks:
-         if hwTicks - k1 > 2**31 / 2:
-            utc = _decodeValue( hwTicks, prevKf )
-         else:
-            utc = _decodeValue( hwTicks, kf )
-      elif k1 > hwTicks:
-         if k1 - hwTicks < 2**31 / 2:
-            utc = _decodeValue( hwTicks, prevKf )            
-         else:
-            utc = _decodeValue( hwTicks, kf )
-      else:
-         utc = kf.utc
+        row = [('%1.6f' % entry.timestamp.pcapTs
+                if entry.timestamp.pcapTs else '').rjust(18)
+               if showPcap else '',
+               ('%1.6f' % entry.timestamp.pcapDelta
+                if entry.timestamp.pcapDelta else '').rjust(18)
+               if showPcap and showDelta else '',
+               hwString.rjust(18),
+               (hwDeltaString if entry.timestamp.hwDelta else '').rjust(18)
+               if showDelta else '',
+               ('%d' % entry.timestamp.utc
+                if entry.timestamp.utc else '').rjust(20)
+               if showUTC else '',
+               (('%1.0f' % entry.timestamp.utcDelta
+                 if entry.timestamp.utcDelta else '')
+                if entry.timestamp.utc else '').rjust(15)
+               if showUTC and showDelta else '',
+               (utcString if entry.timestamp.utc else '').rjust(30)
+               if showUTC else '',
+               (socket.inet_ntoa(entry.srcIp)
+                if entry.srcIp else '').rjust(15)
+               if showSourceIp else '',
+               vlanOrDevIdString.rjust(20),
+               note.rjust(5)]
 
-   rollover = False
-   hwDelta = 0
-   pcapDelta = 0
-   utcDelta = 0
+        if filename:
+            f.write(' '.join(row) + '\n')
+        else:
+            print((' '.join(row)))
 
-   if devId in prevHwTicks:
-      hwDelta = hwTicks - prevHwTicks[ devId ]
-      if hwDelta < 0:
-         hwDelta += MAX_TICKS
-         rollover = True
-   prevHwTicks[ devId ] = hwTicks
+    if filename:
+        f.close()
 
-   if devId in prevPcapTime and prevPcapTime[ devId ]:
-      pcapDelta = ( pcapTs - prevPcapTime[ devId ] ) * 10**9
-   prevPcapTime[ devId ] = pcapTs
 
-   if utc and devId in prevUtc and prevUtc[ devId ]:
-      utcDelta = ( utc - prevUtc[ devId ] )
-   prevUtc[ devId ] = utc
+def _decodeValue(timestamp, keyframe):
+    if keyframe is None:
+        return 0
 
-   return Timestamp( pcapTs, pcapDelta, hwTicks, hwDelta, 
-                     utc, utcDelta, rollover )
+    diff = timestamp - keyframe.asicTs
+    if diff < 0:
+        diff += MAX_TICKS
+    return keyframe.utc + int(round(diff * TICK_LENGTH * keyframe.skewFactor))
 
-def _readPcap( inputFile, outputFile, fcs ):
-   try:
-      inFile = open( inputFile, 'rb' )
-   except IOError, e:
-      sys.exit( '\nERROR: Unable to open file %s: %s\n' % 
-                ( inputFile, str( e ) ) )
 
-   pcapData = []
-   pcapReader = dpkt.pcap.Reader( inFile )
-   pcapInfo = [ x for x in pcapReader ]
+def _decodeTimestamps(pcapTs, hwTicks, devId):
+    kf = None
+    prevKf = None
 
-   if outputFile:
-      try:
-         outFile = open( outputFile, 'w' )
-      except IOError, e:
-         sys.exit( '\nERROR: Unable to open file %s: %s\n' % 
-                   ( outputFile, str( e ) ) )
-      pcapWriter = PcapNGWriter( outFile )
+    kframes = len(keyframes[devId])
+    if kframes > 0:
+        assert kframes < 3
+        kf = keyframes[devId][-1]
+        if kframes == 2:
+            prevKf = keyframes[devId][0]
 
-   for devId in set( vlanToDevId.values() ):
-      keyframes[ devId ] = []
+    k1 = kf.asicTs if kf else None
+    utc = 0
+    if k1:
+        if k1 < hwTicks:
+            if hwTicks - k1 > 2 ** 31 / 2:
+                utc = _decodeValue(hwTicks, prevKf)
+            else:
+                utc = _decodeValue(hwTicks, kf)
+        elif k1 > hwTicks:
+            if k1 - hwTicks < 2 ** 31 / 2:
+                utc = _decodeValue(hwTicks, prevKf)
+            else:
+                utc = _decodeValue(hwTicks, kf)
+        else:
+            utc = kf.utc
 
-   print( '\nDecoding timestamps...\n' )
-   for pcapEntry in pcapInfo:
-      pcapTs, buf = pcapEntry
-      eth = dpkt.ethernet.Ethernet( buf )
+    rollover = False
+    hwDelta = 0
+    pcapDelta = 0
+    utcDelta = 0
 
-      # Key frame
-      if eth.type == 2048 and eth.ip.p == 253 and eth.ip.ttl == 64:
-         (asicTime, utc, deviceId) = \
-             struct.unpack('>2Q%ixH4x' % ( len( eth.ip.data ) - 22 ), 
-                           eth.ip.data)
-         if deviceId not in keyframes:
-            sys.exit( 'ERROR: Keyframe from device %d seen in the capture, '
-                      'but device not configured in the '
-                      'VLAN->deviceId mapping! ' % 
-                      deviceId )
-         if len( keyframes[ deviceId ] ) == 2:
-            keyframes[ deviceId ] = keyframes[ deviceId ][ 1: ]
+    if devId in prevHwTicks:
+        hwDelta = hwTicks - prevHwTicks[devId]
+        if hwDelta < 0:
+            hwDelta += MAX_TICKS
+            rollover = True
+    prevHwTicks[devId] = hwTicks
 
-         hwTicks = asicTime & 0x7FFFFFFF
-         keyframes[ deviceId ].append( KeyframeData( hwTicks, utc ) )
+    if devId in prevPcapTime and prevPcapTime[devId]:
+        pcapDelta = (pcapTs - prevPcapTime[devId]) * 10 ** 9
+    prevPcapTime[devId] = pcapTs
 
-         pcapData.append( Pcap( Timestamp( pcapTs=pcapTs, 
-                                           pcapDelta=0, 
+    if utc and devId in prevUtc and prevUtc[devId]:
+        utcDelta = (utc - prevUtc[devId])
+    prevUtc[devId] = utc
+
+    return Timestamp(pcapTs, pcapDelta, hwTicks, hwDelta,
+                     utc, utcDelta, rollover)
+
+
+def _readPcap(inputFile, outputFile, fcs):
+    try:
+        inFile = open(inputFile, 'rb')
+    except IOError as e:
+        sys.exit('\nERROR: Unable to open file %s: %s\n' %
+                 (inputFile, str(e)))
+
+    pcapData = []
+    pcapReader = dpkt.pcap.Reader(inFile)
+    pcapInfo = [x for x in pcapReader]
+
+    if outputFile:
+        try:
+            outFile = open(outputFile, 'w')
+        except IOError as e:
+            sys.exit('\nERROR: Unable to open file %s: %s\n' %
+                     (outputFile, str(e)))
+        pcapWriter = PcapNGWriter(outFile)
+
+    for devId in set(vlanToDevId.values()):
+        keyframes[devId] = []
+
+    print('\nDecoding timestamps...\n')
+    for pcapEntry in pcapInfo:
+        pcapTs, buf = pcapEntry
+        eth = dpkt.ethernet.Ethernet(buf)
+
+        # Key frame
+        if eth.type == 2048 and eth.ip.p == 253 and eth.ip.ttl == 64:
+            skewFactor = 1
+
+            # Keyframe contains skew fields
+            if len(eth.ip.data) == 62:
+                (asicTime, utc, skewNumerator, skewDenominator, deviceId) = \
+                    struct.unpack('>2Q8x2Q16xH4x',
+                                  eth.ip.data)
+                skewFactor = skewNumerator / skewDenominator
+            else: # len == 46
+                (asicTime, utc, deviceId) = \
+                    struct.unpack('>2Q%ixH4x' % (len(eth.ip.data) - 22),
+                                  eth.ip.data)
+
+            if deviceId not in keyframes:
+                sys.exit('ERROR: Keyframe from device %d seen in the capture, '
+                         'but device not configured in the '
+                         'VLAN->deviceId mapping! ' %
+                         deviceId)
+            if len(keyframes[deviceId]) == 2:
+                keyframes[deviceId] = keyframes[deviceId][1:]
+
+            hwTicks = asicTime & 0x7FFFFFFF
+            keyframes[deviceId].append(KeyframeData(hwTicks, utc, skewFactor))
+
+            pcapData.append(Pcap(Timestamp(pcapTs=pcapTs,
+                                           pcapDelta=0,
                                            hwTicks=hwTicks,
-                                           hwDelta=0, 
-                                           utc=utc, 
-                                           utcDelta=0, 
-                                           rollover=False ), 
-                                keyframe=True, 
-                                srcIp=eth.ip.src, 
-                                vlanOrDevId=deviceId ) )
-         if outputFile:
-            pcapWriter.writepkt( buf, ts=0 )
-      else:
-         vlan = None
-         if not _untaggedTraffic():
-            # Ignore packets which don't belong to the configured VLANs
-            try:
-               vlan = VLANEthernet( buf ).vlan
-            except Exception, e:
-               continue
+                                           hwDelta=0,
+                                           utc=utc,
+                                           utcDelta=0,
+                                           rollover=False),
+                                 keyframe=True,
+                                 srcIp=eth.ip.src,
+                                 vlanOrDevId=deviceId))
+            if outputFile:
+                pcapWriter.writepkt(buf, ts=0)
+        else:
+            vlan = None
+            if not _untaggedTraffic():
+                # Ignore packets which don't belong to the configured VLANs
+                try:
+                    vlan = VLANEthernet(buf).vlan
+                except Exception as e:
+                    continue
 
-            if vlan not in vlanToDevId:
-               print( 'Skipping packet because VLAN %s not configured in '
-                      'VLAN->deviceId mapping!' % vlan )
-               continue
+                if vlan not in vlanToDevId:
+                    print(('Skipping packet because VLAN %s not configured in '
+                          'VLAN->deviceId mapping!' % vlan))
+                    continue
 
-         if fcs:
-            (stamp,) = struct.unpack('>L', buf[ -8 : -4 ])
-         else:
-            (stamp,) = struct.unpack('>L', buf[ -4 : ])
+            if fcs:
+                (stamp,) = struct.unpack('>L', buf[-8: -4])
+            else:
+                (stamp,) = struct.unpack('>L', buf[-4:])
 
-         hwTicks = ( ( stamp & 0xffffff00 ) >> 1 ) | ( stamp & 0x7f )
-         devId = _devId( vlan )
-         ts =  _decodeTimestamps( pcapTs, hwTicks, devId )
-         pcapData.append( Pcap( timestamp=ts, 
-                                keyframe=False, 
-                                srcIp=eth.ip.src if eth.type == 2048 else None, 
-                                vlanOrDevId=vlan ) )
-         if outputFile:
-            pcapWriter.writepkt( buf, ts=float( ts.utc ) / 10**9 )
+            hwTicks = ((stamp & 0xffffff00) >> 1) | (stamp & 0x7f)
+            devId = _devId(vlan)
+            ts = _decodeTimestamps(pcapTs, hwTicks, devId)
+            pcapData.append(Pcap(timestamp=ts,
+                                 keyframe=False,
+                                 srcIp=eth.ip.src if eth.type == 2048 else None,
+                                 vlanOrDevId=vlan))
+            if outputFile:
+                pcapWriter.writepkt(buf, ts=float(ts.utc) / 10 ** 9)
 
-   if outputFile:
-      pcapWriter.close()
+    if outputFile:
+        pcapWriter.close()
 
-   return pcapData
+    return pcapData
+
 
 def main():
-   # Create help string and parse cmd line
-   usage = 'usage: %prog [options] <input-filename>'
-   op = optparse.OptionParser(usage=usage)
-   op.add_option( '-d', '--delta', dest='delta', 
+    # Create help string and parse cmd line
+    usage = 'usage: %prog [options] <input-filename>'
+    op = optparse.OptionParser(usage=usage)
+    op.add_option('-d', '--delta', dest='delta',
                   action='store_true', help='show delta between consecutive '
                                             'packets in UTC decode details '
-                                            '(requires -u)' )
-   op.add_option( '-f', '--fcs', dest='fcs', 
-                  action='store_true', help='input pcap includes FCS' )
-   op.add_option( '-p', '--pcap-timestamps', dest='pcap', 
-                  action='store_true', 
+                                            '(requires -u)')
+    op.add_option('-f', '--fcs', dest='fcs',
+                  action='store_true', help='input pcap includes FCS')
+    op.add_option('-p', '--pcap-timestamps', dest='pcap',
+                  action='store_true',
                   help='show pcap timestamps in UTC decode details '
-                       '(requires -u)' )
-   op.add_option( '-r', '--recover-utc', dest='utc', 
-                  action='store_true', 
+                       '(requires -u)')
+    op.add_option('-r', '--recover-utc', dest='utc',
+                  action='store_true',
                   help='show UTC time in UTC decode details '
-                       '(requires -u)' )
-   op.add_option( '-o', '--output-file', dest='pcapFilename', 
-                  action='store', help='decode UTC to pcap' )
-   op.add_option( '-s', '--src-ip', dest='src', 
-                  action='store_true', 
+                       '(requires -u)')
+    op.add_option('-o', '--output-file', dest='pcapFilename',
+                  action='store', help='decode UTC to pcap')
+    op.add_option('-s', '--src-ip', dest='src',
+                  action='store_true',
                   help='show source IP in UTC decode details '
-                       '(requires -u)' )
-   op.add_option( '-t', '--ticks', dest='ticks', 
-                  action='store_true', 
+                       '(requires -u)')
+    op.add_option('-t', '--ticks', dest='ticks',
+                  action='store_true',
                   help='show hw timestamps as ticks in UTC decode details '
-                       '(requires -u)' )
-   op.add_option( '-u', '--utc-details', dest='utcDetails', 
-                  action='store_true', 
-                  help='show/print-to-file UTC decode details' )
-   op.add_option( '-w', '--write-details-to-file', dest='detailsFilename', 
-                  action='store', help='output file for UTC decode details' )
+                       '(requires -u)')
+    op.add_option('-u', '--utc-details', dest='utcDetails',
+                  action='store_true',
+                  help='show/print-to-file UTC decode details')
+    op.add_option('-w', '--write-details-to-file', dest='detailsFilename',
+                  action='store', help='output file for UTC decode details')
 
-   opts, arguments = op.parse_args()
+    opts, arguments = op.parse_args()
 
-   if not vlanToDevId:
-      sys.exit( 'ERROR: Please configure the deviceId->VLAN mapping at the '
-                'top of the script!' )
- 
-   # Check cmd line options
-   if not arguments:
-      op.error( 'You need to specify an input filename.' )
-   if len( arguments ) > 1:
-      op.error( 'Too many input arguments.' )
-   if opts.detailsFilename and not opts.utcDetails:
-      op.error( 'Output filename specified, but generating UTC decode '
-                'details is not enabled. Please use the "-u" option in '
-                'order to enable that.' )
+    if not vlanToDevId:
+        sys.exit('ERROR: Please configure the deviceId->VLAN mapping at the '
+                 'top of the script!')
 
-   pcapData = _readPcap( arguments[ 0 ],
+    # Check cmd line options
+    if not arguments:
+        op.error('You need to specify an input filename.')
+    if len(arguments) > 1:
+        op.error('Too many input arguments.')
+    if opts.detailsFilename and not opts.utcDetails:
+        op.error('Output filename specified, but generating UTC decode '
+                 'details is not enabled. Please use the "-u" option in '
+                 'order to enable that.')
+
+    pcapData = _readPcap(arguments[0],
                          opts.pcapFilename,
-                         opts.fcs )
-   if opts.utcDetails:
-      _printTimestamps( pcapData, opts.pcap, opts.utc, opts.ticks, 
-                        opts.delta, opts.src, opts.detailsFilename )
+                         opts.fcs)
+    if opts.utcDetails:
+        _printTimestamps(pcapData, opts.pcap, opts.utc, opts.ticks,
+                         opts.delta, opts.src, opts.detailsFilename)
+
 
 if __name__ == '__main__':
-   main()
+    main()
