@@ -55,7 +55,7 @@
 #       4.0 - added nanosecond precision for output pcap
 #       4.1 - bug fixes
 #       5.0 - migrated to Python 3 and added skew field support
-#		5.1 - fixed encoding issue with PCAP write to file
+#		    5.1 - fixed encoding issue with PCAP write to file
 
 '''
    DESCRIPTION
@@ -247,6 +247,7 @@ class PcapNGWriter(dpkt.pcap.Writer):
         self.__f = fileobj
         fh = PcapNGFileHdr(naplen=snaplen, linktype=linktype)
         self.__f.write(bytes(fh))
+
 
     def writepkt(self, pkt, ts=None):
         if ts is None:
