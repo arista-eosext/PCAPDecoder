@@ -1,0 +1,47 @@
+Keyframes in the example PCAPs were generated using the following switch configuration:
+
+! device: 7150 (DCS-7150S-64-CL, EOS-4.23.4.2M-2GB)
+!
+ptp source ip 192.168.30.15
+ptp priority1 255
+ptp priority2 255
+ptp mode boundary
+!
+tap aggregation
+   mode exclusive
+   mode exclusive no-errdisable Ethernet33
+!
+interface Ethernet33
+   description PTP Input Port
+   no switchport
+   ip address 10.0.30.15/24
+   ptp enable
+!
+interface Ethernet35
+   description Tap Port
+   switchport mode tap
+   switchport tap default interface Ethernet37
+   switchport tap default interface Ethernet39
+!
+interface Ethernet37
+   description Tool Port With FCS
+   mac timestamp before-fcs
+   switchport mode tool
+!
+interface Ethernet39
+   description Tool Port No FCS
+   mac timestamp replace-fcs
+   switchport mode tool
+!
+interface Management1
+   ip address 192.168.1.20/24
+!
+platform fm6000 keyframe K interface Ethernet37,Ethernet39 111.111.111.111 abcd.abcd.abcd
+platform fm6000 keyframe K device 888
+platform fm6000 keyframe K rate 2
+platform fm6000 keyframe K source ip 1.2.3.4
+platform fm6000 keyframe K fields skew
+!
+no ip routing
+!
+end

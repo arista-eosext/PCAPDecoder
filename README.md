@@ -6,8 +6,8 @@ applied by the Arista 7150 series switches.
 ## INSTALLATION
 
 ### Requirements: 
-* Python 2.6 or later: http://www.python.org/
-* dpkt: http://code.google.com/p/dpkt/
+* Python 3.5 or later: http://www.python.org/
+* dpkt: https://dpkt.readthedocs.io/en/latest/
 
 In order to install PCAP Timestamp Decoder, copy 'pcaptd' to
 your filesystem.
@@ -60,12 +60,15 @@ http://wiki.wireshark.org/Development/LibpcapFileFormat
 
 
 ## COMPATIBILITY 
-Version 4.0 has been developed and tested against
-Python 2.7 on MacOS, but should work on any other operating
-system supporting Python 2.6 or later. Please reach out to
+
+Version 5.0 has been developed and tested against
+Python 3.7 on Linux, but should work on any other operating
+system supporting Python 3.5 or later. Please reach out to
 support@aristanetworks.com for assistance if needed.
 
+
 ## LIMITATIONS
+
 The tool tries to detect a counter rollover (by checking if a
 subsequent timestamp has a lower tick value than it
 predecessor). However, this mechanism does not uncover periods
@@ -84,6 +87,9 @@ is desired, use the '--utc-details' option.
 One or two keyframes in advance are required for decoding UTC in
 a packet. If they are not available, then decoding the
 timestamp in packets might not be possible.
+
+Where insufficient timing data is available, timestamps will be
+set to zero.
 
 The decoder assumes that the timestamp is located in the last
 four bytes of the frame. If the input file includes the Ethernet
