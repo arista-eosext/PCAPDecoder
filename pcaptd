@@ -29,7 +29,7 @@
 #
 # PCAP Timestamp Decoder
 #
-#    Version 5.0 16/06/2020
+#    Version 5.1 06/11/2020
 #    Written by:
 #       John Peach, Arista Networks
 #       Matt Murray, Arista Networks
@@ -55,6 +55,7 @@
 #       4.0 - added nanosecond precision for output pcap
 #       4.1 - bug fixes
 #       5.0 - migrated to Python 3 and added skew field support
+#		    5.1 - fixed encoding issue with PCAP write to file
 
 '''
    DESCRIPTION
@@ -145,6 +146,9 @@
       a packet. If they are not available, then decoding the
       timestamp in packets might not be possible.
 
+      Where insufficient timing data is available, timestamps will be
+      set to zero.
+
       The decoder assumes that the timestamp is located in the last
       four bytes of the frame. If the input file includes the Ethernet
       FCS (typically stripped by the NIC driver) this will result
@@ -154,6 +158,7 @@
 '''
 
 vlanToDevId = {}
+
 
 # ------------------------------------------------------------
 # !!! INSERT VLAN->deviceId mapping below !!!
@@ -241,19 +246,20 @@ class PcapNGWriter(dpkt.pcap.Writer):
                  snaplen=1500, linktype=dpkt.pcap.DLT_EN10MB):
         self.__f = fileobj
         fh = PcapNGFileHdr(naplen=snaplen, linktype=linktype)
-        self.__f.write(str(fh))
+        self.__f.write(bytes(fh))
+
 
     def writepkt(self, pkt, ts=None):
         if ts is None:
             ts = time.time()
-        s = str(pkt)
+        s = bytes(pkt)
         n = len(s)
         ph = dpkt.pcap.PktHdr(tv_sec=int(ts),
                               # nanosecond precision
                               tv_usec=int((float(ts) -
                                            int(ts)) * 1000000000.0),
                               caplen=n, len=n)
-        self.__f.write(str(ph))
+        self.__f.write(bytes(ph))
         self.__f.write(s)
 
     def close(self):
@@ -296,7 +302,7 @@ def _printTimestamps(pcapData, showPcap, showUTC, showTicks, showDelta,
 
     if filename:
         try:
-            f = open(filename, 'w')
+            f = open(filename, 'wb')
         except IOError as e:
             sys.exit('\nERROR: Unable to open file %s: %s\n' %
                      (filename, str(e)))
@@ -444,7 +450,7 @@ def _readPcap(inputFile, outputFile, fcs):
 
     if outputFile:
         try:
-            outFile = open(outputFile, 'w')
+            outFile = open(outputFile, 'wb')
         except IOError as e:
             sys.exit('\nERROR: Unable to open file %s: %s\n' %
                      (outputFile, str(e)))
